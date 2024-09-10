@@ -1,0 +1,4 @@
+- name: This is a ansible project
+  hosts: localhost
+  roles:
+    - role: "project_tasks"

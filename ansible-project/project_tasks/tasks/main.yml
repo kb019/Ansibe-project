@@ -1,0 +1,105 @@
+---
+# tasks file for project_tasks
+- name: Create three(3) EC2 instances on AWS using Ansible loops, two ubuntu and one linux
+  amazon.aws.ec2_instance:
+    name: "{{ item.name }}"
+    key_name: "bhargav-aws-key-pair"
+    region: "us-west-1"
+    aws_access_key: "{{ aws_access_key }}"
+    aws_secret_key: "{{ aws_secret_key }}"
+    instance_type: t2.micro
+    security_group: sg-0aef46b945ebe96e5
+    network:
+      assign_public_ip: true
+    image_id: "{{ item.ami_id }}"
+    tags:
+      OS_Type: "{{ item.os_type }}"
+  loop:
+    - {
+        name: "Ubuntu Machine 1",
+        ami_id: ami-0d53d72369335a9d6,
+        os_type: "ubuntu",
+      }
+    - {
+        name: "Ubuntu Machine 2",
+        ami_id: ami-0d53d72369335a9d6,
+        os_type: "ubuntu",
+      }
+    - {
+        name: "Linux Machine 1",
+        ami_id: ami-025258b26b492aec6,
+        os_type: "aws_linux",
+      }
+
+- name: Gather information about all instances created in AZ us-west-1
+  amazon.aws.ec2_instance_info:
+    aws_access_key: "{{ aws_access_key }}"
+    aws_secret_key: "{{ aws_secret_key }}"
+    include_attributes: ["userData", "kernel", "rootDeviceName"]
+    filters:
+      instance-state-name: ["pending", "running"]
+    region: us-west-1
+  register: ec2_node_info
+
+- name: Wait till all instances are running
+  amazon.aws.ec2_instance_info:
+    aws_access_key: "{{ aws_access_key }}"
+    aws_secret_key: "{{ aws_secret_key }}"
+    region: us-west-1
+    instance_ids:
+      - "{{ item.instance_id }}"
+  loop: "{{ ec2_node_info.instances }}"
+  register: instance_info
+  until: "instance_info.instances[0].state.name == 'running'"
+  retries: 15
+
+- name: Print return information  of AMI images
+  ansible.builtin.debug:
+    var: image_info
+
+- name: Set machine names in inventory file for ubuntu
+  ansible.builtin.shell:
+    cmd: "echo 'ubuntu@{{ item.public_ip_address }}' >> inventory.ini"
+    chdir: ~/
+  loop: "{{ ec2_node_info.instances }}"
+  when: item.tags.OS_Type == "ubuntu"
+
+- name: Set machine names in inventory file for linux
+  ansible.builtin.shell:
+    cmd: "echo 'ec2-user@{{ item.public_ip_address }}' >> inventory.ini"
+    chdir: ~/
+  loop: "{{ ec2_node_info.instances }}"
+  when: item.tags.OS_Type == "aws_linux"
+
+- name: Set authorized key taken from file for ubuntu machines
+  ansible.posix.authorized_key:
+    user: ubuntu
+    state: present
+    key: "{{ lookup('file','~/.ssh/id_rsa.pub') }}"
+  delegate_to: "ubuntu@{{ item.public_ip_address}}"
+  loop: "{{ ec2_node_info.instances }}"
+  when: item.tags.OS_Type == "ubuntu"
+  # loop: "{{ groups['all'] }}"
+
+- name: Set authorized key taken from file for linux machines
+  ansible.posix.authorized_key:
+    user: ec2-user
+    state: present
+    key: "{{ lookup('file','~/.ssh/id_rsa.pub') }}"
+  delegate_to: "ec2-user@{{ item.public_ip_address}}"
+  loop: "{{ ec2_node_info.instances }}"
+  when: item.tags.OS_Type == "aws_linux"
+
+- name: shutdown ubuntu machines
+  become: true
+  ansible.builtin.command: /usr/sbin/shutdown -t now
+  delegate_to: "ubuntu@{{ item.public_ip_address}}"
+  loop: "{{ ec2_node_info.instances }}"
+  when: item.tags.OS_Type == "ubuntu"
+
+- name: shutdown linux machines
+  become: true
+  ansible.builtin.command: /usr/sbin/shutdown -t now
+  delegate_to: "ec2-user@{{ item.public_ip_address}}"
+  loop: "{{ ec2_node_info.instances }}"
+  when: item.tags.OS_Type == "aws_linux"
